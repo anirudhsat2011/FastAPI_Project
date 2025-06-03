@@ -3,77 +3,103 @@ from pydantic import BaseModel
 import json
 import os
 
-app = FastAPI()
+app = FastAPI()  # Create FastAPI app instance
 
-# JSON file to store student data
-DATA_FILE = "students.json"
-
-# Define the structure of a student
+# Define the data model for a student
 class Student(BaseModel):
     name: str
     age: int
     major: str
 
-# Load existing students from the file
+DATA_FILE = "students.json"  # File to save/load student data
+
 def load_students():
+    """
+    Load students data from the JSON file.
+    Returns a list of students as dictionaries.
+    If the file doesn't exist, returns an empty list.
+    """
     if os.path.exists(DATA_FILE):
         with open(DATA_FILE, "r") as f:
-            return [Student(**s) for s in json.load(f)]
+            return json.load(f)
     return []
 
-# Save the current list of students to the file
-def save_students():
+def save_students(students):
+    """
+    Save the list of students (as dictionaries) to the JSON file.
+    """
     with open(DATA_FILE, "w") as f:
-        json.dump([s.dict() for s in students], f, indent=2)
+        json.dump(students, f, indent=4)
 
-# Load students at startup
+# Load students once when the app starts
 students = load_students()
 
-# Root endpoint to test if API is running
 @app.get("/")
 def root():
-    return {"Hello": "Student API"}
+    """
+    Root endpoint: simple hello world message.
+    """
+    return {"message": "Welcome to the Student API"}
 
-# Add a new student
+@app.get("/students")
+def get_students():
+    """
+    Return the full list of students.
+    """
+    return students
+
 @app.post("/students", response_model=Student)
 def create_student(student: Student):
-    # Check if a student with same name, age, and major exists
-    for s in students:
-        if s.name == student.name and s.age == student.age and s.major == student.major:
-            raise HTTPException(status_code=400, detail="Student already exists")
-    students.append(student)
-    save_students()
+    """
+    Create a new student.
+    Append to the in-memory list and save to disk.
+    Returns the newly created student.
+    """
+    # Convert the Pydantic model to dict for JSON serialization
+    student_data = student.dict()
+
+    # Optional: Prevent duplicates by checking if student exists (commented out)
+    # for s in students:
+    #     if s == student_data:
+    #         raise HTTPException(status_code=400, detail="Student already exists")
+
+    students.append(student_data)  # Add new student
+    save_students(students)        # Save updated list to file
     return student
 
-# List all students (with a limit)
-@app.get("/students/", response_model=list[Student])
-def list_students(limit: int = 10):
-    return students[0:limit]  # Return limited list of students
-
-# Get one student by index
-@app.get("/students/{student_id}", response_model=Student)
+@app.get("/students/{student_id}")
 def get_student(student_id: int):
-    if student_id < len(students):
+    """
+    Retrieve a student by their index (ID).
+    If index is out of range, return 404 error.
+    """
+    if 0 <= student_id < len(students):
         return students[student_id]
     else:
         raise HTTPException(status_code=404, detail="Student not found")
 
-# ✅ Update an existing student
 @app.put("/students/{student_id}", response_model=Student)
 def update_student(student_id: int, updated_student: Student):
-    if student_id < len(students):
-        students[student_id] = updated_student     # Replace existing student data
-        save_students()                            # Save changes to file
-        return updated_student                      # Return updated data
+    """
+    Update an existing student's data by index.
+    Save the changes to disk.
+    """
+    if 0 <= student_id < len(students):
+        students[student_id] = updated_student.dict()  # Update data
+        save_students(students)                        # Save to file
+        return updated_student
     else:
         raise HTTPException(status_code=404, detail="Student not found")
 
-# ❌ Delete a student by index
 @app.delete("/students/{student_id}")
 def delete_student(student_id: int):
-    if student_id < len(students):
-        deleted = students.pop(student_id)  # Remove the student from the list
-        save_students()                     # Save updated list
-        return {"message": "Student deleted", "student": deleted}
+    """
+    Delete a student by index.
+    Save the updated list to disk.
+    """
+    if 0 <= student_id < len(students):
+        students.pop(student_id)   # Remove student from list
+        save_students(students)    # Save updated list
+        return {"detail": "Student deleted successfully"}
     else:
         raise HTTPException(status_code=404, detail="Student not found")
