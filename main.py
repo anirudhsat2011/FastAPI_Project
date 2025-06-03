@@ -35,11 +35,11 @@ def root():
     return {"Hello": "Student API"}
 
 # Add a new student
-@app.post("/students")
+@app.post("/students", response_model=Student)
 def create_student(student: Student):
-    students.append(student)  # Add student to list
-    save_students()           # Save updated list to file
-    return students           # Return updated list
+    students.append(student)
+    save_students()
+    return student  # <-- return just the newly created student
 
 # List all students (with a limit)
 @app.get("/students/", response_model=list[Student])
