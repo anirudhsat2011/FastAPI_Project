@@ -37,9 +37,13 @@ def root():
 # Add a new student
 @app.post("/students", response_model=Student)
 def create_student(student: Student):
+    # Check if a student with same name, age, and major exists
+    for s in students:
+        if s.name == student.name and s.age == student.age and s.major == student.major:
+            raise HTTPException(status_code=400, detail="Student already exists")
     students.append(student)
     save_students()
-    return student  # <-- return just the newly created student
+    return student
 
 # List all students (with a limit)
 @app.get("/students/", response_model=list[Student])
