@@ -1,0 +1,9 @@
+FastAPI - The main framework used to create the API. It handles routing, input validation, and responses.
+
+Uvicorn - A lightweight server that runs the FastAPI application so it can be accessed via a web browser or tools like Postman.
+
+Pydantic - Used to define and validate the structure of student data, such as name, age, and major.
+
+JSON & OS (built-in modules) - Used to read and write student data to a file on disk.
+
+Typing - Helps define expected data types like lists and optional fields, improving code clarity and error checking.
