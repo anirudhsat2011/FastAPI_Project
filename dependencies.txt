@@ -1,3 +1,9 @@
-fastapi
-uvicorn
-pydantic
+# === Required packages ===
+fastapi==0.115.2
+uvicorn==0.34.0
+pydantic==2.11.1
+
+# === Package descriptions ===
+# fastapi: Main framework used to define API endpoints
+# uvicorn: ASGI server used to run the FastAPI app
+# pydantic: Used for input validation and data parsing
