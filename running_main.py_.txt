@@ -1,3 +1,0 @@
-To run this code, I go to the folder where my main.py file is saved. Then, I open a terminal there and type:
-uv run -- uvicorn main:app --reload
-This starts the FastAPI server. After that, I can open a browser and visit http://127.0.0.1:8000 to check the API, or http://127.0.0.1:8000/docs to use the interactive API docs.
