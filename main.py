@@ -1,8 +1,7 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel
-from typing import List, Optional
-import json
-import os
+from typing import Dict, Optional
+import shelve
 
 app = FastAPI()
 
@@ -11,67 +10,60 @@ class Student(BaseModel):
     age: int
     major: str
 
-DATA_FILE = "students.json"
+SHELVE_DB = "students.db"
 
-def load_students() -> List[dict]:
-    if os.path.exists(DATA_FILE):
-        with open(DATA_FILE, "r") as f:
-            return json.load(f)
-    return []
+def get_all_students() -> Dict[str, Student]:
+    with shelve.open(SHELVE_DB) as db:
+        return dict(db)
 
-def save_students(students: List[dict]) -> None:
-    with open(DATA_FILE, "w") as f:
-        json.dump(students, f, indent=4)
+def get_student(student_id: str) -> Student:
+    with shelve.open(SHELVE_DB) as db:
+        if student_id in db:
+            return db[student_id]
+        raise HTTPException(status_code=404, detail="Student not found")
 
-def get_next_id() -> int:
-    used_ids = sorted(student["id"] for student in students)
-    for i in range(1, len(used_ids) + 2):
-        if i not in used_ids:
-            return i
+def add_student(student: Student) -> str:
+    with shelve.open(SHELVE_DB, writeback=True) as db:
+        next_id = str(max([int(k) for k in db.keys()] + [0]) + 1)
+        db[next_id] = student
+        return next_id
 
-students = load_students()
+def update_student(student_id: str, student: Student):
+    with shelve.open(SHELVE_DB, writeback=True) as db:
+        if student_id not in db:
+            raise HTTPException(status_code=404, detail="Student not found")
+        db[student_id] = student
 
-@app.get("/")
-def root():
-    return {"message": "Welcome to the Student API"}
+def delete_student(student_id: str):
+    with shelve.open(SHELVE_DB, writeback=True) as db:
+        if student_id not in db:
+            raise HTTPException(status_code=404, detail="Student not found")
+        del db[student_id]
 
 @app.get("/students")
-def list_students(major: Optional[str] = None):
-    if major:
-        return [s for s in students if s["major"].lower() == major.lower()]
-    return students
+def list_students(major: Optional[str] = Query(None), age: Optional[int] = Query(None)):
+    students = get_all_students()
+    filtered = {
+        sid: s for sid, s in students.items()
+        if (major is None or s.major == major) and (age is None or s.age == age)
+    }
+    return filtered
+
+@app.get("/students/{student_id}")
+def get_student_by_id(student_id: str):
+    return get_student(student_id)
 
 @app.post("/students")
 def create_student(student: Student):
-    student_data = student.dict()
-    student_data["id"] = get_next_id()
-    students.append(student_data)
-    save_students(students)
-    return student_data
-
-@app.get("/students/{student_id}")
-def get_student(student_id: int):
-    for student in students:
-        if student["id"] == student_id:
-            return student
-    raise HTTPException(status_code=404, detail="Student not found")
+    student_id = add_student(student)
+    return {"id": student_id, "student": student}
 
 @app.put("/students/{student_id}")
-def update_student(student_id: int, updated_student: Student):
-    for i, student in enumerate(students):
-        if student["id"] == student_id:
-            updated = updated_student.dict()
-            updated["id"] = student_id
-            students[i] = updated
-            save_students(students)
-            return updated
-    raise HTTPException(status_code=404, detail="Student not found")
+def update_student_by_id(student_id: str, student: Student):
+    update_student(student_id, student)
+    return {"message": "Student updated", "student": student}
 
 @app.delete("/students/{student_id}")
-def delete_student(student_id: int):
-    for i, student in enumerate(students):
-        if student["id"] == student_id:
-            students.pop(i)
-            save_students(students)
-            return {"detail": "Student deleted successfully"}
-    raise HTTPException(status_code=404, detail="Student not found")
+def delete_student_by_id(student_id: str):
+    delete_student(student_id)
+    return {"message": "Student deleted"}
