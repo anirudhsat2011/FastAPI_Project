@@ -7,15 +7,11 @@ import secrets
 
 app = FastAPI()
 
-# Database setup
 DATABASE_URL = "sqlite:///students.sqlite"
 engine = create_engine(DATABASE_URL, echo=True)
 
-# Security setup
 API_KEY_NAME = "Authorization"
 api_key_header = APIKeyHeader(name=API_KEY_NAME, auto_error=False)
-
-# --- Models ---
 
 class User(SQLModel, table=True):
     username: str = Field(primary_key=True)
@@ -31,7 +27,6 @@ class Student(SQLModel, table=True):
     age: int
     major: str
 
-# Pydantic model for creating students without ID
 class StudentCreate(BaseModel):
     name: str
     age: int
@@ -45,23 +40,19 @@ class UserLogin(BaseModel):
     username: str
     password: str
 
-# --- Dependency ---
 def get_session():
     with Session(engine) as session:
         yield session
 
-# --- Auth helper ---
 def verify_token(api_key: str = Security(api_key_header), session: Session = Depends(get_session)):
     if not api_key:
         raise HTTPException(status_code=401, detail="Missing authorization token")
     token_obj = session.get(Token, api_key)
-    # We stored tokens keyed by username, so check differently:
+
     token_obj = session.exec(select(Token).where(Token.token == api_key)).first()
     if not token_obj:
         raise HTTPException(status_code=401, detail="Invalid token")
     return api_key
-
-# --- Routes ---
 
 @app.on_event("startup")
 def on_startup():
@@ -82,10 +73,8 @@ def login(user: UserLogin, session: Session = Depends(get_session)):
     user_obj = session.get(User, user.username)
     if not user_obj or user_obj.password != user.password:
         raise HTTPException(status_code=401, detail="Invalid username or password")
-    # generate token
     token = secrets.token_hex(16)
     token_obj = Token(username=user.username, token=token)
-    # delete old token if exists
     old_token = session.get(Token, user.username)
     if old_token:
         session.delete(old_token)
@@ -140,8 +129,6 @@ def delete_student(student_id: int, session: Session = Depends(get_session)):
     session.delete(student)
     session.commit()
     return
-
-# --- Swagger UI authorize button ---
 
 from fastapi.openapi.utils import get_openapi
 
