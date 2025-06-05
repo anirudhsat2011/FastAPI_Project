@@ -1,3 +1,31 @@
-To run this code, I go to the folder where my main.py file is saved. Then, I open a terminal there and type:
-uv run -- uvicorn main:app --reload
-This starts the FastAPI server. After that, I can open a browser and visit http://127.0.0.1:8000 to check the API, or http://127.0.0.1:8000/docs to use the interactive API docs.
+# FastAPI Student Registry
+
+A secure and modern student registry API built using **FastAPI**, **SQLModel**, and **QLite**, with **JWT-based authentication**. This project allows authenticated users to manage student records.
+
+# Features
+
+- User registration and login with password hashing
+- JWT token-based authentication
+- Full CRUD API for student records
+- SQLite database with SQLModel ORM
+- Swagger UI at `/docs` for easy testing
+
+# Requirements
+
+- Python 3.10+
+- `virtualenv` or `venv`
+
+# Installation
+
+```bash
+# To access the git repository
+cd FastAPI_Project
+
+# Create a virtual environment
+python3 -m venv .venv
+source .venv/bin/activate 
+
+```
+# Run the code
+Type in "uv run -- uvicorn main:app --reload" in your terminal.
+Go to the link "http://127.0.0.1:8000" in your browser to access the app.
