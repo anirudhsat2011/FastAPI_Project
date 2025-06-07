@@ -1,157 +1,285 @@
-from fastapi import FastAPI, HTTPException, Depends, Security
+from fastapi import FastAPI, HTTPException, Depends, Header, status
 from fastapi.security.api_key import APIKeyHeader
-from sqlmodel import SQLModel, Field, create_engine, Session, select
+from sqlmodel import SQLModel, Field, Session, create_engine, select
+from typing import Optional, List, Dict
 from pydantic import BaseModel
-from typing import Optional, List
 import secrets
+import hashlib
 
-app = FastAPI()
+app = FastAPI(
+    title="CampusCore",
+    description="The heart of student management and communication!!!",
+    version="1.0.0",
+)
 
-DATABASE_URL = "sqlite:///students.sqlite"
-engine = create_engine(DATABASE_URL, echo=True)
+# Database setup
+DATABASE_URL = "sqlite:///./students.sqlite"
+engine = create_engine(DATABASE_URL, echo=False)
 
-API_KEY_NAME = "Authorization"
+# Role levels
+ROLE_GUEST = 100
+ROLE_VIP = 200
+ROLE_OWNER = 300
+
+# API key header for auth
+API_KEY_NAME = "X-API-Key"
 api_key_header = APIKeyHeader(name=API_KEY_NAME, auto_error=False)
 
-class User(SQLModel, table=True):
-    username: str = Field(primary_key=True)
-    password: str
+# --- Models ---
 
-class Token(SQLModel, table=True):
-    username: str = Field(primary_key=True)
-    token: str
+class User(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    username: str = Field(index=True, unique=True)
+    hashed_password: str
+    role: int = ROLE_GUEST
+    api_key: str = Field(default_factory=lambda: secrets.token_hex(16))
+    suspended: bool = False
+
+class UserCreate(BaseModel):
+    username: str
+    password: str
 
 class Student(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     name: str
     age: int
-    major: str
+    course: str
 
 class StudentCreate(BaseModel):
     name: str
     age: int
-    major: str
+    course: str
 
-class UserRegister(BaseModel):
-    username: str
-    password: str
+class StudentUpdate(BaseModel):
+    name: Optional[str]
+    age: Optional[int]
+    course: Optional[str]
 
-class UserLogin(BaseModel):
+class ChatMessage(BaseModel):
     username: str
-    password: str
+    message: str
+
+# --- Utility functions ---
 
 def get_session():
     with Session(engine) as session:
         yield session
 
-def verify_token(api_key: str = Security(api_key_header), session: Session = Depends(get_session)):
+def hash_password(password: str) -> str:
+    return hashlib.sha256(password.encode()).hexdigest()
+
+def verify_password(password: str, hashed: str) -> bool:
+    return hash_password(password) == hashed
+
+def get_user_by_username(session: Session, username: str) -> Optional[User]:
+    statement = select(User).where(User.username == username.lower())
+    return session.exec(statement).first()
+
+def get_user_by_api_key(session: Session, api_key: str) -> Optional[User]:
+    statement = select(User).where(User.api_key == api_key)
+    return session.exec(statement).first()
+
+def create_owner_user():
+    with Session(engine) as session:
+        owner = get_user_by_username(session, "anirudh")
+        if not owner:
+            password = "Aaradhya2509"
+            hashed = hash_password(password)
+            owner = User(username="anirudh", hashed_password=hashed, role=ROLE_OWNER)
+            session.add(owner)
+            session.commit()
+            print("Owner user created: username='anirudh', password='Aaradhya2509'")
+
+# --- Dependency for authentication ---
+
+async def get_current_user(api_key: str = Depends(api_key_header), session: Session = Depends(get_session)) -> User:
     if not api_key:
-        raise HTTPException(status_code=401, detail="Missing authorization token")
-    token_obj = session.get(Token, api_key)
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing API Key")
+    user = get_user_by_api_key(session, api_key)
+    if not user:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API Key")
+    if user.suspended:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User suspended")
+    return user
 
-    token_obj = session.exec(select(Token).where(Token.token == api_key)).first()
-    if not token_obj:
-        raise HTTPException(status_code=401, detail="Invalid token")
-    return api_key
+# --- Welcome endpoint ---
 
-@app.on_event("startup")
-def on_startup():
-    SQLModel.metadata.create_all(engine)
+@app.get("/root", tags=["Welcome Message"])
+def root():
+    return {"Welcome to CampusCore, The heart of student management and communication!!!"}
 
-@app.post("/register", status_code=201)
-def register(user: UserRegister, session: Session = Depends(get_session)):
-    existing_user = session.get(User, user.username)
-    if existing_user:
-        raise HTTPException(status_code=400, detail="User already exists")
-    user_obj = User(username=user.username, password=user.password)
-    session.add(user_obj)
+# --- User Management ---
+
+@app.post("/register", tags=["User Management"])
+def register(user_create: UserCreate, session: Session = Depends(get_session)):
+    username_lower = user_create.username.lower()
+    if get_user_by_username(session, username_lower):
+        raise HTTPException(status_code=400, detail="Username already exists")
+    hashed = hash_password(user_create.password)
+    user = User(username=username_lower, hashed_password=hashed)
+    session.add(user)
     session.commit()
-    return {"message": "User registered successfully"}
+    session.refresh(user)
+    return {"username": user.username, "api_key": user.api_key, "role": user.role}
 
-@app.post("/login")
-def login(user: UserLogin, session: Session = Depends(get_session)):
-    user_obj = session.get(User, user.username)
-    if not user_obj or user_obj.password != user.password:
+@app.post("/login", tags=["User Management"])
+def login(user_create: UserCreate, session: Session = Depends(get_session)):
+    username_lower = user_create.username.lower()
+    user = get_user_by_username(session, username_lower)
+    if not user or not verify_password(user_create.password, user.hashed_password):
         raise HTTPException(status_code=401, detail="Invalid username or password")
-    token = secrets.token_hex(16)
-    token_obj = Token(username=user.username, token=token)
-    old_token = session.get(Token, user.username)
-    if old_token:
-        session.delete(old_token)
-        session.commit()
-    session.add(token_obj)
-    session.commit()
-    return {"token": token}
+    if user.suspended:
+        raise HTTPException(status_code=403, detail="User suspended")
+    # Return API key and role
+    return {"username": user.username, "api_key": user.api_key, "role": user.role}
 
-@app.post("/students", status_code=201, dependencies=[Depends(verify_token)])
-def create_student(student_create: StudentCreate, session: Session = Depends(get_session)):
-    student = Student.from_orm(student_create)
-    session.add(student)
-    session.commit()
-    session.refresh(student)
-    return student
+@app.get("/users", tags=["User Management"])
+def list_users(current_user: User = Depends(get_current_user), session: Session = Depends(get_session)):
+    if current_user.role != ROLE_OWNER:
+        raise HTTPException(status_code=403, detail="Only owner can list users")
+    statement = select(User)
+    users = session.exec(statement).all()
+    return [{"username": u.username, "role": u.role, "suspended": u.suspended} for u in users]
 
-@app.get("/students", response_model=List[Student], dependencies=[Depends(verify_token)])
-def list_students(major: Optional[str] = None, age: Optional[int] = None, session: Session = Depends(get_session)):
-    query = select(Student)
-    if major:
-        query = query.where(Student.major == major)
+@app.delete("/users/{username}", tags=["User Management"])
+def delete_user(username: str, current_user: User = Depends(get_current_user), session: Session = Depends(get_session)):
+    if current_user.role != ROLE_OWNER:
+        raise HTTPException(status_code=403, detail="Only owner can delete users")
+    username_lower = username.lower()
+    user = get_user_by_username(session, username_lower)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    if user.role == ROLE_OWNER:
+        raise HTTPException(status_code=403, detail="Cannot delete owner")
+    session.delete(user)
+    session.commit()
+    return {"detail": f"User '{username_lower}' deleted"}
+
+@app.post("/users/{username}/suspend", tags=["User Management"])
+def suspend_user(username: str, current_user: User = Depends(get_current_user), session: Session = Depends(get_session)):
+    if current_user.role != ROLE_OWNER:
+        raise HTTPException(status_code=403, detail="Only owner can suspend users")
+    username_lower = username.lower()
+    user = get_user_by_username(session, username_lower)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    if user.role == ROLE_OWNER:
+        raise HTTPException(status_code=403, detail="Cannot suspend owner")
+    user.suspended = True
+    session.add(user)
+    session.commit()
+    return {"detail": f"User '{username_lower}' suspended"}
+
+@app.post("/users/{username}/unsuspend", tags=["User Management"])
+def unsuspend_user(username: str, current_user: User = Depends(get_current_user), session: Session = Depends(get_session)):
+    if current_user.role != ROLE_OWNER:
+        raise HTTPException(status_code=403, detail="Only owner can unsuspend users")
+    username_lower = username.lower()
+    user = get_user_by_username(session, username_lower)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    user.suspended = False
+    session.add(user)
+    session.commit()
+    return {"detail": f"User '{username_lower}' unsuspended"}
+
+@app.post("/users/{username}/role", tags=["User Management"])
+def change_user_role(username: str, new_role: int, current_user: User = Depends(get_current_user), session: Session = Depends(get_session)):
+    if current_user.role != ROLE_OWNER:
+        raise HTTPException(status_code=403, detail="Only owner can change user roles")
+    username_lower = username.lower()
+    if username_lower == current_user.username:
+        raise HTTPException(status_code=403, detail="Cannot change your own role")
+    if new_role == ROLE_OWNER:
+        raise HTTPException(status_code=403, detail="Cannot assign Owner role")
+    if new_role not in [ROLE_GUEST, ROLE_VIP]:
+        raise HTTPException(status_code=400, detail="Invalid role level")
+    user = get_user_by_username(session, username_lower)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    user.role = new_role
+    session.add(user)
+    session.commit()
+    return {"detail": f"User '{username_lower}' role changed to {new_role}"}
+
+# --- Student Management ---
+
+@app.post("/students", tags=["Student Management"])
+def create_student(student: StudentCreate, current_user: User = Depends(get_current_user), session: Session = Depends(get_session)):
+    if current_user.role < ROLE_VIP:
+        raise HTTPException(status_code=403, detail="Insufficient permissions to create student")
+    new_student = Student(name=student.name, age=student.age, course=student.course)
+    session.add(new_student)
+    session.commit()
+    session.refresh(new_student)
+    return new_student
+
+@app.get("/students", tags=["Student Management"])
+def list_students(course: Optional[str] = None, age: Optional[int] = None, current_user: User = Depends(get_current_user), session: Session = Depends(get_session)):
+    statement = select(Student)
+    if course:
+        statement = statement.where(Student.course == course)
     if age:
-        query = query.where(Student.age == age)
-    students = session.exec(query).all()
+        statement = statement.where(Student.age == age)
+    students = session.exec(statement).all()
     return students
 
-@app.get("/students/{student_id}", response_model=Student, dependencies=[Depends(verify_token)])
-def get_student(student_id: int, session: Session = Depends(get_session)):
+@app.get("/students/{student_id}", tags=["Student Management"])
+def get_student(student_id: int, current_user: User = Depends(get_current_user), session: Session = Depends(get_session)):
     student = session.get(Student, student_id)
     if not student:
         raise HTTPException(status_code=404, detail="Student not found")
     return student
 
-@app.put("/students/{student_id}", response_model=Student, dependencies=[Depends(verify_token)])
-def update_student(student_id: int, student_update: StudentCreate, session: Session = Depends(get_session)):
+@app.put("/students/{student_id}", tags=["Student Management"])
+def update_student(student_id: int, student_update: StudentUpdate, current_user: User = Depends(get_current_user), session: Session = Depends(get_session)):
+    if current_user.role < ROLE_VIP:
+        raise HTTPException(status_code=403, detail="Insufficient permissions to update student")
     student = session.get(Student, student_id)
     if not student:
         raise HTTPException(status_code=404, detail="Student not found")
-    student.name = student_update.name
-    student.age = student_update.age
-    student.major = student_update.major
+    if student_update.name is not None:
+        student.name = student_update.name
+    if student_update.age is not None:
+        student.age = student_update.age
+    if student_update.course is not None:
+        student.course = student_update.course
     session.add(student)
     session.commit()
     session.refresh(student)
     return student
 
-@app.delete("/students/{student_id}", status_code=204, dependencies=[Depends(verify_token)])
-def delete_student(student_id: int, session: Session = Depends(get_session)):
+@app.delete("/students/{student_id}", tags=["Student Management"])
+def delete_student(student_id: int, current_user: User = Depends(get_current_user), session: Session = Depends(get_session)):
+    if current_user.role < ROLE_VIP:
+        raise HTTPException(status_code=403, detail="Insufficient permissions to delete student")
     student = session.get(Student, student_id)
     if not student:
         raise HTTPException(status_code=404, detail="Student not found")
     session.delete(student)
     session.commit()
-    return
+    return {"detail": f"Student with id {student_id} deleted"}
 
-from fastapi.openapi.utils import get_openapi
+# --- Communication (Chatbox) ---
 
-def custom_openapi():
-    if app.openapi_schema:
-        return app.openapi_schema
-    openapi_schema = get_openapi(
-        title="Student Registry with Auth",
-        version="1.0.0",
-        description="API for student registry with token-based auth",
-        routes=app.routes,
-    )
-    openapi_schema["components"]["securitySchemes"] = {
-        "APIKeyHeader": {
-            "type": "apiKey",
-            "name": API_KEY_NAME,
-            "in": "header"
-        }
-    }
-    for path in openapi_schema["paths"]:
-        for method in openapi_schema["paths"][path]:
-            openapi_schema["paths"][path][method]["security"] = [{"APIKeyHeader": []}]
-    app.openapi_schema = openapi_schema
-    return app.openapi_schema
+chat_messages: List[Dict] = []
 
-app.openapi = custom_openapi
+@app.get("/chat", tags=["Communication"])
+def get_chat_messages():
+    # Return last 100 messages
+    return chat_messages[-100:]
+
+@app.post("/chat", tags=["Communication"])
+def post_chat_message(message: ChatMessage, current_user: User = Depends(get_current_user)):
+    chat_messages.append({"username": current_user.username, "message": message.message})
+    # Limit chat length
+    if len(chat_messages) > 200:
+        chat_messages.pop(0)
+    return {"detail": "Message sent"}
+
+# --- Startup event to create DB and owner user ---
+
+@app.on_event("startup")
+def on_startup():
+    SQLModel.metadata.create_all(engine)
+    create_owner_user()
